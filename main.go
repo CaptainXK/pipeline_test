@@ -7,6 +7,7 @@ import(
 	"os/signal"
 	"syscall"
 	"sync"
+	"runtime"
 )
 
 func data_init(_test_data []int) {
@@ -86,7 +87,7 @@ func handle_signal(_quit_chans []chan int){
 }
 
 //check goroutine
-func res_recv(quit_chan chan int ,recv_chan chan int, reply_chan chan int, _recv_threshold int, _wg sync.WaitGroup){
+func res_recv(quit_chan chan int ,recv_chan chan int, reply_chan chan int, _recv_threshold int, _wg *sync.WaitGroup){
 	_count := 0
 
 	for true {
@@ -102,31 +103,32 @@ func res_recv(quit_chan chan int ,recv_chan chan int, reply_chan chan int, _recv
 						_count += 1
 					}
 			default:
+					//fmt.Println("Recv goroutine is runnning")
 		}
 
 		//reply master indicating all data process done
 		if _count >= _recv_threshold{
 			select{
 				case reply_chan <- _count:
-					//fmt.Println("Recv goroutine : all data done")
+					fmt.Println("Recv goroutine : all data done")
+					goto DONE
 				default:
-						goto DONE
+					goto DONE
 			}
 		}else{
-			//fmt.Println("Recv goroutine : Wait for data...")
+			//fmt.Println("Recv goroutine : Wait for data, current count = ", _count)
 		}
 
-		//fmt.Println(*_res)
 	}
-	//fmt.Println("Recv goroutine quit")
 
 DONE:
+	fmt.Println("Recv goroutine quit")
 	_wg.Done()
 
 }
 
 //parallel adder
-func add_parallel(_test_data []int, c_in chan int, c_out chan int, c_quit chan int, stage_id int, _wg sync.WaitGroup){
+func add_parallel(_test_data []int, c_in chan int, c_out chan int, c_quit chan int, stage_id int, _wg *sync.WaitGroup){
 	//fmt.Println("Stage#", stage_id, "online")
 
 	for true{
@@ -141,10 +143,12 @@ func add_parallel(_test_data []int, c_in chan int, c_out chan int, c_quit chan i
 				c_out<- _offset
 
 			default:
+				//fmt.Println("Worker#", stage_id, " is running")
 		}
 	}
 
 DONE:
+	fmt.Println("worker#", stage_id, " stop...")
 	_wg.Done()
 
 	//fmt.Println("Stage#", stage_id, " quit")
@@ -158,20 +162,20 @@ func test_parallel(_test_data []int, _tot_nb, _stage_nb int){
 	_count := 0
 	var wg sync.WaitGroup
 
-	//monitor system signal
-	go handle_signal(_quit_chans)
+	////monitor system signal
+	//go handle_signal(_quit_chans)
 
 	wg.Add(_stage_nb + 1)
 
 	for i := 0 ; i < _stage_nb ; i++{
-		go add_parallel(_test_data, _data_chans[i], _data_chans[i+1], _quit_chans[i], i, wg)
+		go add_parallel(_test_data, _data_chans[i], _data_chans[i+1], _quit_chans[i], i, &wg)
 	}
 
 	//start the goroutine to receive 
 	_res_chan := make(chan int, 2)
-	go res_recv(_quit_chans[_stage_nb], _data_chans[_stage_nb], _res_chan, _tot_nb, wg)
+	go res_recv(_quit_chans[_stage_nb], _data_chans[_stage_nb], _res_chan, _tot_nb, &wg)
 
-	time.Sleep(3)
+	time.Sleep(1)
 
 	_t1 := time.Now()
 
@@ -215,7 +219,14 @@ FOR_QUIT:
 	fmt.Println("Tot ", _count)
 	fmt.Println("Time elapsed ", _t2)
 
-	//wg.Wait()
+	for i := 0; i < len(_quit_chans); i++{
+		_quit_chans[i] <- 1
+	}
+
+	fmt.Println("Try to stop all goroutine")
+
+	wg.Wait()
+
 
 	//close all chans
 	for i :=0; i < (_stage_nb + 1); i++{
@@ -230,8 +241,11 @@ FOR_QUIT:
 }
 
 func main(){
-	const SIZE int  = (1 << 10)
-	var stage_nb int = 3
+	const SIZE int  = (1 << 12)
+	var stage_nb int = 8
+
+	//set max cpu number can be involved
+	runtime.GOMAXPROCS(8)
 
 	//data slice
 	var test_array []int = make([]int, SIZE)
